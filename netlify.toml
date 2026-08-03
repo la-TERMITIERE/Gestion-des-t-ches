@@ -1,0 +1,9 @@
+# Déploiement Netlify (option git). Pour le drag-and-drop, voir DEPLOY.md.
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
