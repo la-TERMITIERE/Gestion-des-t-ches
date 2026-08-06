@@ -32,3 +32,34 @@ language sql security definer set search_path = public as $$
      and close_date < (current_date - interval '1 month');
 $$;
 select archive_old_tasks();   -- archive tout de suite l'existant
+
+-- ── 0018 : retour / transfert d'une tâche par son destinataire ─────
+-- « new row violates row-level security policy for table "tasks" » : lors d'un
+-- UPDATE, Postgres applique la policy SELECT en WITH CHECK sur la NOUVELLE ligne.
+-- Retourner la tâche la réassigne à un tiers → celui qui la retourne ne la voit
+-- plus → refus. Correctif : une RPC SECURITY DEFINER qui contourne la RLS après
+-- sa propre vérification d'autorisation (les policies restent strictes).
+drop policy if exists tasks_update on tasks;   -- restaure l'état sûr de 0002
+create policy tasks_update on tasks for update to authenticated
+  using      (my_role() = 'chef' or assigned_by_id = auth.uid() or recipient_id = auth.uid())
+  with check (my_role() = 'chef' or assigned_by_id = auth.uid() or recipient_id = auth.uid());
+
+create or replace function return_task(
+    p_task_id text, p_new_recipient_id uuid, p_new_recipient_name text,
+    p_new_department text, p_note text)
+returns text language plpgsql security definer set search_path = public as $fn$
+declare prev_name text; cur_rid uuid; cur_stat text;
+begin
+  select recipient_id, recipient_name, status into cur_rid, prev_name, cur_stat
+    from tasks where id = p_task_id;
+  if not found then raise exception 'Tâche introuvable.'; end if;
+  if not (my_role() = 'chef' or cur_rid = auth.uid()) then
+    raise exception 'Seul le destinataire actuel ou le Chef Admin peut retourner cette tâche.'; end if;
+  if cur_stat = 'Terminé' then raise exception 'Impossible de retourner une tâche terminée.'; end if;
+  update tasks set recipient_id = p_new_recipient_id, recipient_name = p_new_recipient_name,
+                   department = coalesce(p_new_department,''), status = 'À faire', progress = 0,
+                   close_date = null, comment = '', chef_comment = p_note
+   where id = p_task_id;
+  return prev_name;
+end $fn$;
+grant execute on function return_task(text, uuid, text, text, text) to authenticated;
