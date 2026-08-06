@@ -399,11 +399,17 @@ const handlers = {
     const np = await personByName(newRecipientName);
     if (!np) return { success: false, error: "Personne introuvable : " + newRecipientName };
     const note = "↩️ Retournée par " + user.name + " vers " + np.name + " — Motif : " + norm(reason);
-    const { error } = await db.from("tasks").update({
-      recipient_name: np.name, recipient_id: np.id, department: np.dept || "",
-      status: "À faire", progress: 0, close_date: null, comment: "", chef_comment: note,
-    }).eq("id", taskId);
-    if (error) return { success: false, error: error.message };
+    // Retourner la tâche réassigne le destinataire vers un tiers : la nouvelle
+    // ligne n'est alors plus visible par celui qui la retourne, et PostgreSQL
+    // applique la policy SELECT en WITH CHECK sur un UPDATE → « new row violates
+    // row-level security policy ». On passe donc par une RPC SECURITY DEFINER
+    // (return_task, migration 0018) qui contourne la RLS après sa propre
+    // vérification d'autorisation.
+    const { error } = await db.rpc("return_task", {
+      p_task_id: taskId, p_new_recipient_id: np.id, p_new_recipient_name: np.name,
+      p_new_department: np.dept || "", p_note: note,
+    });
+    if (error) return { success: false, error: friendlyError(error, "Retour refusé.") };
     if (np.name !== user.name)
       notify("task_assigned", { recipient: np.name, taskId, description: t.description, dateLimit: t.date_limit });
     return { success: true, previousRecipient: t.recipient_name, newRecipient: np.name };
