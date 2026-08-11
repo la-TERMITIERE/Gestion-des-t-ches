@@ -68,6 +68,27 @@ traduction courte-durée pour Postgres. `auth.uid()` = `personnel.id`.
 `emp` + dénominations **PAU/GE→chef**, **DF→dir**, **Assistante RH→emp** (avec
 `sees_all_tasks`). La fonction « salaire » (rh/df/ge/pau) est dérivée de `role_raw`.
 
+### Niveaux hiérarchiques (v7.1)
+Le **rôle** dit qui voit et modifie quoi ; le **niveau** dit à quelle strate
+d'attribution on appartient, pour comparer des gens comparables :
+
+| Niveau | 1 | 2 | 3 | 4 | 5 | 6 |
+|---|---|---|---|---|---|---|
+| | PAU | GE | Directeurs | Responsables de pôle | Autres | Stagiaires |
+
+Le niveau est **déduit** de `(role_raw, position)` par `autoHierarchyLevel()` dans
+l'UI — les intitulés du terrain étant irréguliers, `personnel.hierarchy_level`
+permet au Chef et à la DA-RH de corriger un cas au coup par coup (NULL = déduit).
+
+L'onglet **« Par niveau »** (Chef / Directeurs / DA-RH) et le bloc **« Mon
+évolution »** du tableau de bord comparent chaque acteur à la **période calendaire
+précédente** (semaine, mois, trimestre, semestre, année). Les indicateurs de tâches
+se calculent en mémoire ; les indices **Innovation** et **Réflexion** viennent de la
+RPC `activity_events(from, to)` — SECURITY DEFINER parce que les policies sur
+`messages` / `reports` sont volontairement étroites, et qui ne renvoie que des
+**compteurs** (jamais un contenu), tout le monde sauf chef/dir/rh n'y voyant que sa
+propre activité.
+
 ## Correspondance des fonctionnalités
 
 | Apps Script | Cible Supabase |

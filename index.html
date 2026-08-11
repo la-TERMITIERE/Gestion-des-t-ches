@@ -963,6 +963,67 @@
   .sal-badge-rejete   { background: #fce8e6; color: #c5221f; }
   .sal-actions { display: flex; gap: 6px; flex-wrap: wrap; }
   .sal-actions .btn { font-size: 12px; padding: 6px 12px; min-height: 32px; }
+
+  /* ─────────────── ✨ v7.1 : ÉVALUATION PAR NIVEAU ─────────────── */
+  /* Onglets de niveau : barre secondaire sous l'onglet principal. */
+  .lvl-tabs { display: flex; gap: 4px; margin-bottom: 16px; background: #f1f3f4;
+              padding: 4px; border-radius: 10px; overflow-x: auto; }
+  .lvl-tab { flex: 1 0 auto; padding: 9px 14px; text-align: center; cursor: pointer;
+             border-radius: 7px; font-size: 13px; font-weight: 500; color: #5f6368;
+             transition: all .15s; user-select: none; white-space: nowrap;
+             border: none; background: none; font-family: inherit; }
+  .lvl-tab:hover { background: rgba(255,255,255,.6); }
+  .lvl-tab.active { background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.12); font-weight: 600; }
+  .lvl-tab .lvl-n { font-size: 10px; font-weight: 700; letter-spacing: .5px;
+                    display: block; opacity: .75; }
+  .lvl-tab .lvl-cnt { font-size: 10px; background: #dadce0; color: #3c4043;
+                      border-radius: 8px; padding: 0 6px; margin-left: 5px; font-weight: 600; }
+  .lvl-tab.active .lvl-cnt { background: #e8f0fe; color: #1967d2; }
+
+  /* Bandeau d'identité du niveau affiché. */
+  .lvl-head { border-radius: 12px; padding: 16px 18px; margin-bottom: 16px; color: #fff; }
+  .lvl-head h3 { font-size: 18px; font-weight: 600; margin-bottom: 3px; }
+  .lvl-head .lvl-sub { font-size: 12.5px; opacity: .92; }
+
+  /* Comparaison période N vs N-1 */
+  .cmp-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+             background: #fff; border: 1px solid #dadce0; border-radius: 12px;
+             padding: 12px 16px; margin-bottom: 16px; }
+  .cmp-bar .cmp-label { font-size: 12px; font-weight: 600; color: #5f6368;
+                        text-transform: uppercase; letter-spacing: .5px; }
+  .cmp-bar select { padding: 7px 10px; font-size: 13px; border: 1px solid #dadce0;
+                    border-radius: 6px; font-family: inherit; }
+  .cmp-window { font-size: 12px; font-weight: 600; color: #1a73e8; background: #e8f0fe;
+                padding: 5px 11px; border-radius: 12px; }
+  .cmp-window.prev { color: #5f6368; background: #f1f3f4; }
+  .cmp-arrow { color: #9aa0a6; font-size: 13px; }
+
+  .delta { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 7px;
+           border-radius: 9px; white-space: nowrap; }
+  .delta.up   { background: #e6f4ea; color: #137333; }
+  .delta.down { background: #fce8e6; color: #c5221f; }
+  .delta.flat { background: #f1f3f4; color: #80868b; }
+  .delta.new  { background: #e8f0fe; color: #1967d2; }
+  .kpi-card .delta { margin-top: 4px; }
+
+  .spark { display: block; width: 96px; height: 26px; }
+  .spark-wrap { display: flex; align-items: center; gap: 8px; }
+  .spark-now { font-size: 12px; font-weight: 700; color: #202124; }
+
+  .lvl-actor-name { display: flex; flex-direction: column; gap: 1px; }
+  .lvl-actor-name .fn { font-size: 11px; color: #5f6368; font-weight: 400; }
+  .lvl-fix { font-size: 11px; padding: 3px 5px; border: 1px solid #dadce0;
+             border-radius: 6px; font-family: inherit; color: #5f6368; background: #fff; }
+  .lvl-note { font-size: 12px; color: #5f6368; background: #f8f9fa; border-left: 3px solid #dadce0;
+              padding: 10px 14px; border-radius: 0 8px 8px 0; margin: 10px 0; line-height: 1.6; }
+  .lvl-note code { background: #f1f3f4; padding: 1px 5px; border-radius: 4px; font-size: 11px; }
+  .lvl-note strong { color: #3c4043; }
+
+  @media (max-width: 768px) {
+    .lvl-tabs { padding: 3px; }
+    .lvl-tab { padding: 8px 10px; font-size: 12px; }
+    .spark { width: 72px; }
+  }
 </style>
 </head>
 <body>
@@ -1103,7 +1164,14 @@
       perEmp:   { mode: 'month', from: null, to: null },
       perDir:   { mode: 'month', from: null, to: null },
       daily:    { mode: 'week', from: null, to: null }     // ✨ v6.7
-    }
+    },
+    // ✨ v7.1 : évaluation par niveau hiérarchique
+    levelTab: 'all',        // 'all' | 1..6 — onglet de niveau affiché
+    levelUnit: 'week',      // granularité de comparaison (cf. PERIOD_UNITS)
+    myEvoUnit: 'week',      // idem pour « Mon évolution » (tableau de bord perso)
+    // Cache des compteurs d'activité (RPC activity_events). `key` = fenêtre
+    // demandée : tant qu'elle ne change pas, on ne rappelle pas le serveur.
+    activity: { key: '', available: false, loading: false, byAuthor: {} }
   };
 
   function periodOf(view) { return state.periods[view] || state.periods.dash; }
@@ -1304,6 +1372,16 @@
         else base.push('Autorisation salaire');
       }
     }
+    // ✨ v7.1 : « Par niveau » — évaluation des tâches par strate hiérarchique.
+    // Réservé aux rôles qui disposent déjà d'une vue transverse (Chef, Directeurs,
+    // DA-RH) : c'est la même portée de lecture que « Par directeur ». Chacun garde
+    // sa propre courbe d'évolution dans son Tableau de bord, quel que soit son rôle.
+    if (hasFeature('hierarchy') && ['chef', 'dir', 'rh'].indexOf(u.role) !== -1
+        && base.indexOf('Par niveau') === -1) {
+      const di = base.indexOf('Par directeur');
+      if (di !== -1) base.splice(di + 1, 0, 'Par niveau');
+      else base.splice(Math.max(0, base.indexOf('Objectifs')), 0, 'Par niveau');
+    }
     // ✨ v7.0 : Innovation est ouvert à tous les rôles — c'est une boîte à idées.
     // Placé après Rapports, et seulement là où le backend sait le servir.
     if (hasFeature('innovation') && base.indexOf('Innovation') === -1) {
@@ -1368,6 +1446,7 @@
     if (t === 'Pilotage')    return renderDashboard();
     if (t === 'Par employé') return renderPerEmployee();
     if (t === 'Par directeur') return renderPerDirector();
+    if (t === 'Par niveau')  return renderLevels();          // ✨ v7.1
     if (t === 'Autorisation salaire') return renderSalaryAuth();   // ✨ v6.8
     if (t === 'Objectifs')   return renderObjectifs();
     if (t === 'Routine journalière') return renderDaily();   // ✨ v6.7
@@ -4317,6 +4396,26 @@
       html += `</div>`;
     }
 
+    // === ✨ v7.1 : MA COURBE D'ÉVOLUTION ===
+    // Ouvert à TOUS les rôles, contrairement à l'onglet « Par niveau » : chacun
+    // doit pouvoir mesurer sa propre progression d'une période à l'autre. La RPC
+    // activity_events ne renvoie que sa propre activité à qui n'est pas
+    // Chef / Directeur / DA-RH, la confidentialité est donc tenue côté base.
+    if (hasFeature('hierarchy')) {
+      html += `<h2 class="db-section-title">📈 Mon évolution</h2>
+        <div class="cmp-bar">
+          <span class="cmp-label">📊 Comparer par</span>
+          <select id="myevo-unit">
+            ${Object.keys(PERIOD_UNITS).map(k =>
+              `<option value="${k}" ${state.myEvoUnit === k ? 'selected' : ''}>${PERIOD_UNITS[k].label}</option>`).join('')}
+          </select>
+          <span class="cmp-window prev" id="myevo-prev">—</span>
+          <span class="cmp-arrow">→</span>
+          <span class="cmp-window" id="myevo-cur">—</span>
+        </div>
+        <div id="myevo-body"></div>`;
+    }
+
     // === LISTE URGENTE ===
     const urgentTasks = myReceivedTasks
       .filter(t => t.status !== 'Terminé')
@@ -4365,6 +4464,82 @@
     </div>`;
 
     $('main-content').innerHTML = html;
+
+    if (hasFeature('hierarchy')) {
+      const sel = $('myevo-unit');
+      if (sel) sel.onchange = e => { state.myEvoUnit = e.target.value; renderMyEvolution(); };
+      renderMyEvolution();
+    }
+  }
+
+  // ✨ v7.1 : « Mon évolution » — même moteur de comparaison que l'onglet
+  // « Par niveau », restreint à l'utilisateur connecté.
+  function renderMyEvolution() {
+    const body = $('myevo-body');
+    if (!body) return;
+    resetStatsMemo();
+    const wins = periodWindows(state.myEvoUnit, LEVEL_HISTORY);
+    const cur = wins[wins.length - 1], prev = wins[wins.length - 2];
+    const elCur = $('myevo-cur'), elPrev = $('myevo-prev');
+    if (elCur)  elCur.textContent  = cur.longLabel;
+    if (elPrev) elPrev.textContent = prev.longLabel;
+
+    const ready = ensureActivity(wins[0].from, cur.to, () => {
+      if (state.currentTab === 'Tableau de bord') renderMyEvolution();
+    });
+
+    const me = state.user.name;
+    const c = actorFullStats(me, cur), p = actorFullStats(me, prev);
+    const meRow = state.personnel.find(x => x.name === me);
+    const L = meRow ? levelDef(personLevel(meRow)) : null;
+
+    let html = '';
+    if (L) {
+      html += `<div class="lvl-head" style="background:${L.grad};padding:12px 16px;">
+        <h3 style="font-size:15px;">Niveau ${L.n} — ${escapeHtml(L.full)}</h3>
+        <div class="lvl-sub">Vous êtes comparé aux personnes du même niveau d'attribution.</div>
+      </div>`;
+    }
+    html += '<div class="kpi-grid">';
+    html += cmpCard('Reçues', c.recues, 'confiées sur la période', '', deltaBadge(c.recues, p.recues));
+    html += cmpCard('Livrées', c.livrees, 'clôturées sur la période',
+                    c.livrees >= p.livrees ? 'ok' : '', deltaBadge(c.livrees, p.livrees));
+    html += cmpCard('Taux', c.recues ? c.taux + '%' : '—', 'de ma charge terminée',
+                    !c.recues ? '' : c.taux >= 70 ? 'ok' : c.taux >= 40 ? 'warn' : 'danger',
+                    ratioDelta(c.taux, p.taux, c.recues, p.recues));
+    html += cmpCard('Ponctualité', c.livrees ? c.ponctualite + '%' : '—', 'livrées dans les délais',
+                    !c.livrees ? '' : c.ponctualite >= 70 ? 'ok' : 'warn',
+                    ratioDelta(c.ponctualite, p.ponctualite, c.livrees, p.livrees));
+    html += cmpCard('Échéances manquées', c.manquees, '', c.manquees ? 'danger' : 'ok',
+                    deltaBadge(c.manquees, p.manquees, { invert: true }));
+    html += cmpCard('Délai moyen', c.delai ? c.delai + 'j' : '—', 'attribution → clôture', '',
+                    (c.delai || p.delai) ? deltaBadge(c.delai, p.delai, { unit: 'j', invert: true }) : '');
+    if (ready && state.activity.available) {
+      html += cmpCard('💡 Innovation', c.innovation, c.ideas + ' idée(s) déposée(s)',
+                      c.innovation ? 'ok' : '', deltaBadge(c.innovation, p.innovation));
+      html += cmpCard('🧠 Réflexion', c.reflexion, c.traces + ' contribution(s) écrite(s)',
+                      c.reflexion ? 'ok' : '', deltaBadge(c.reflexion, p.reflexion));
+    } else if (!ready) {
+      html += cmpCard('💡 Innovation', '…', 'chargement', '', '');
+      html += cmpCard('🧠 Réflexion', '…', 'chargement', '', '');
+    }
+    html += '</div>';
+
+    const hist = wins.map(w => actorFullStats(me, w));
+    const series = [
+      { label: 'Reçues',  color: '#1a73e8', values: hist.map(s => s.recues) },
+      { label: 'Livrées', color: '#137333', values: hist.map(s => s.livrees) },
+      { label: 'Échéances manquées', color: '#c5221f', values: hist.map(s => s.manquees) }
+    ];
+    if (ready && state.activity.available) {
+      series.push({ label: '💡 Innovation', color: '#8430ce', values: hist.map(s => s.innovation) });
+      series.push({ label: '🧠 Réflexion',  color: '#b06000', values: hist.map(s => s.reflexion) });
+    }
+    html += `<div class="dash-section">
+      <h3>📈 Ma courbe sur ${LEVEL_HISTORY} ${PERIOD_UNITS[state.myEvoUnit].label.toLowerCase()}s</h3>
+      ${buildPeriodChart(wins, series)}</div>`;
+    html += levelMethodNote(ready);
+    body.innerHTML = html;
   }
 
   function kpiCardSimple(label, value, sub, modifier) {
@@ -6248,6 +6423,690 @@
 
     detailContext = { tasks: list, title: title, search:'', recipient:'', dept:'' };
     showDetailDrawer();
+  }
+
+  // ═════════════════════════════════════════════════════════════════
+  //  ✨ v7.1 : ÉVALUATION PAR NIVEAU HIÉRARCHIQUE
+  //
+  //  Six strates d'attribution. Le niveau n'est pas un rôle applicatif
+  //  (ROLE_CONFIG dit qui voit quoi) mais une place dans l'organigramme : on
+  //  compare les Directeurs entre eux, les Responsables de pôle entre eux, etc.
+  //  — sinon un stagiaire à 3 tâches paraît toujours moins « performant » qu'un
+  //  directeur à 40, ce qui ne veut rien dire.
+  // ═════════════════════════════════════════════════════════════════
+  const HIERARCHY_LEVELS = [
+    { n: 1, code: 'PAU', label: 'PAU',                 full: 'Personne autorisée',
+      desc: 'Sommet du circuit de décision et d’autorisation.',
+      color: '#5b2c8d', grad: 'linear-gradient(135deg,#7b3fbf,#4a2477)' },
+    { n: 2, code: 'GE',  label: 'GE',                  full: 'Gérance exécutive',
+      desc: 'Direction exécutive de l’entreprise.',
+      color: '#1557b0', grad: 'linear-gradient(135deg,#1a73e8,#104386)' },
+    { n: 3, code: 'DIR', label: 'Directeurs',          full: 'Les directeurs',
+      desc: 'Directions métier (dont DF et DA-RH).',
+      color: '#0a8043', grad: 'linear-gradient(135deg,#12a154,#0a6b39)' },
+    { n: 4, code: 'RP',  label: 'Resp. pôles',         full: 'Les responsables de pôle',
+      desc: 'Encadrement intermédiaire : pôles, départements, chantiers.',
+      color: '#b06000', grad: 'linear-gradient(135deg,#f9ab00,#a06400)' },
+    { n: 5, code: 'AUT', label: 'Autres',              full: 'Les autres',
+      desc: 'Agents et collaborateurs sans fonction d’encadrement.',
+      color: '#3c4043', grad: 'linear-gradient(135deg,#5f6368,#33373b)' },
+    { n: 6, code: 'STA', label: 'Stagiaires',          full: 'Les stagiaires',
+      desc: 'Personnes en stage, quelle que soit la direction d’accueil.',
+      color: '#8430ce', grad: 'linear-gradient(135deg,#a457e8,#6b23ab)' }
+  ];
+  function levelDef(n) {
+    return HIERARCHY_LEVELS[Math.max(1, Math.min(6, Number(n) || 5)) - 1];
+  }
+
+  // Déduction automatique du niveau à partir de (role_raw, position). L'ORDRE des
+  // tests est la règle métier : on descend du plus spécifique au plus général.
+  //   • « stagiaire » l'emporte sur tout — c'est le cas réel d'un compte déclaré
+  //     « Chef Administrateur » dont la fonction est « Stagiaire RH ANPE » ;
+  //   • la gérance exécutive est testée avant les directions, parce qu'une
+  //     « Gérante Exécutive » est enregistrée avec le rôle applicatif Directeur ;
+  //   • « gérant exécutif » exige bien le mot exécutif, sinon « Gérant ferme »
+  //     (un chef de département) remonterait au niveau 2.
+  // Les intitulés du terrain restent irréguliers : le Chef et la DA-RH peuvent
+  // corriger un niveau à la main (personnel.hierarchy_level), et cette correction
+  // gagne toujours — cf. personLevel().
+  function autoHierarchyLevel(p) {
+    const role = String((p && (p.role || p.roleRaw)) || '').toLowerCase().trim();
+    const pos  = String((p && p.position) || '').toLowerCase().trim();
+    const both = role + ' ' + pos;
+    const norm = (p && p.roleNorm) || '';
+    if (/stagiaire|\bstage\b/.test(both)) return 6;
+    if (role === 'pau' || pos === 'pau' || /personne autoris/.test(both)) return 1;
+    if (role === 'ge' || pos === 'ge'
+        || /g[ée]ran[tc][a-z]*\s+ex[ée]cuti/.test(both)
+        || /g[ée]rance\s+ex[ée]cutive/.test(both)) return 2;
+    if (norm === 'dir' || /directeur|directrice|\bdf\b|\bda-?rh\b|\bdg\b|\bpdg\b/.test(both)) return 3;
+    if (norm === 'dept_head' || norm === 'chef' || norm === 'rh'
+        || /responsable|\bchef\b|superviseur|coordonnateur|coordinateur|g[ée]rant/.test(both)) return 4;
+    return 5;
+  }
+  // Niveau effectif : correction manuelle si elle existe, sinon déduction.
+  function personLevel(p) {
+    const fixed = p && p.hierarchyLevel;
+    if (fixed >= 1 && fixed <= 6) return Number(fixed);
+    return autoHierarchyLevel(p);
+  }
+  function activePersonnel() {
+    return state.personnel.filter(p => String(p.status || '').toLowerCase() !== 'inactif');
+  }
+
+  // ── Fenêtres calendaires comparables ─────────────────────────────
+  //  Volontairement CALENDAIRES (et non glissantes comme getPeriodBounds) :
+  //  « cette semaine vs la semaine passée » n'a de sens que si les deux fenêtres
+  //  se découpent sur la même grille. offset = 0 → période en cours, −1 → la
+  //  précédente, etc. Les débordements de mois sont gérés par Date lui-même
+  //  (new Date(2026, -1, 1) = décembre 2025).
+  const PERIOD_UNITS = {
+    week:     { label: 'Semaine',   prev: 'Semaine précédente' },
+    month:    { label: 'Mois',      prev: 'Mois précédent' },
+    quarter:  { label: 'Trimestre', prev: 'Trimestre précédent' },
+    semester: { label: 'Semestre',  prev: 'Semestre précédent' },
+    year:     { label: 'Année',     prev: 'Année précédente' }
+  };
+  function periodWindow(unit, offset) {
+    const now = new Date(); now.setHours(0, 0, 0, 0);
+    offset = offset || 0;
+    let from, to, label, longLabel;
+    if (unit === 'month') {
+      from = new Date(now.getFullYear(), now.getMonth() + offset, 1);
+      to   = new Date(from.getFullYear(), from.getMonth() + 1, 0);
+      label = from.toLocaleString('fr-FR', { month: 'short', year: '2-digit' });
+      longLabel = from.toLocaleString('fr-FR', { month: 'long', year: 'numeric' });
+    } else if (unit === 'quarter') {
+      const q = Math.floor(now.getMonth() / 3) + offset;
+      from = new Date(now.getFullYear(), q * 3, 1);
+      to   = new Date(from.getFullYear(), from.getMonth() + 3, 0);
+      label = 'T' + (from.getMonth() / 3 + 1) + ' ' + String(from.getFullYear()).slice(2);
+      longLabel = 'trimestre ' + (from.getMonth() / 3 + 1) + ' ' + from.getFullYear();
+    } else if (unit === 'semester') {
+      const s = Math.floor(now.getMonth() / 6) + offset;
+      from = new Date(now.getFullYear(), s * 6, 1);
+      to   = new Date(from.getFullYear(), from.getMonth() + 6, 0);
+      const num = from.getMonth() / 6 + 1;
+      label = (num === 1 ? '1er' : '2d') + ' sem. ' + String(from.getFullYear()).slice(2);
+      longLabel = (num === 1 ? '1er' : '2d') + ' semestre ' + from.getFullYear();
+    } else if (unit === 'year') {
+      from = new Date(now.getFullYear() + offset, 0, 1);
+      to   = new Date(now.getFullYear() + offset, 11, 31);
+      label = String(from.getFullYear());
+      longLabel = 'année ' + from.getFullYear();
+    } else { // week — lundi → dimanche (ISO)
+      const day = now.getDay() || 7;
+      from = new Date(now); from.setDate(now.getDate() - (day - 1) + offset * 7);
+      to   = new Date(from); to.setDate(from.getDate() + 6);
+      label = 'S' + getWeekNum(from);
+      longLabel = 'semaine ' + getWeekNum(from) + ' (du '
+        + from.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' }) + ' au '
+        + to.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' }) + ')';
+    }
+    return { from: ymd(from), to: ymd(to), label: label, longLabel: longLabel };
+  }
+  // Les `count` dernières fenêtres, de la plus ancienne à la période en cours.
+  function periodWindows(unit, count) {
+    const out = [];
+    for (let i = count - 1; i >= 0; i--) out.push(periodWindow(unit, -i));
+    return out;
+  }
+
+  // ── Compteurs d'activité (innovation / réflexion) ────────────────
+  //  Les tâches sont déjà en mémoire ; les traces écrites (commentaires, idées,
+  //  objectifs, rapports) ne le sont pas et leurs policies RLS sont étroites.
+  //  Elles arrivent donc agrégées par la RPC activity_events (migration 0019).
+  //  Poids assumés, affichés dans l'UI pour que le calcul reste contestable.
+  const INNOV_WEIGHTS  = { idea_new: 1, idea_study: 2, idea_kept: 4, idea_dropped: 1 };
+  const REFLEX_WEIGHTS = { message: 1, idea_comment: 1, objective_comment: 1, objective: 2, report: 4 };
+
+  // Charge la fenêtre [from,to] si besoin. Renvoie true si les données sont
+  // prêtes, false si un chargement vient d'être lancé (onReady rappellera).
+  function ensureActivity(from, to, onReady) {
+    const key = from + '→' + to;
+    const a = state.activity;
+    if (a.key === key && !a.loading) return true;
+    if (a.loading === key) return false;
+    a.loading = key;
+    const done = (available, events) => {
+      // Une autre granularité a pu être choisie entre-temps : la réponse en vol
+      // ne correspond plus à ce qu'on affiche, on la jette.
+      if (a.loading !== key) return;
+      a.loading = false; a.key = key; a.available = available;
+      const by = {};
+      (events || []).forEach(e => { (by[e.author] = by[e.author] || []).push(e); });
+      a.byAuthor = by;
+      if (typeof onReady === 'function') onReady();
+    };
+    call('getActivityEvents', URL_TOKEN, from, to)
+      .then(res => done(!!(res && res.success && res.available !== false), res && res.events))
+      .catch(() => done(false, []));
+    return false;
+  }
+  function activityScores(author, w) {
+    const evs = state.activity.byAuthor[author] || [];
+    let innovation = 0, reflexion = 0, ideas = 0, traces = 0;
+    evs.forEach(e => {
+      if (e.date < w.from || e.date > w.to) return;
+      if (INNOV_WEIGHTS[e.kind])  { innovation += INNOV_WEIGHTS[e.kind]  * e.n; ideas  += e.n; }
+      if (REFLEX_WEIGHTS[e.kind]) { reflexion  += REFLEX_WEIGHTS[e.kind] * e.n; traces += e.n; }
+    });
+    return { innovation: innovation, reflexion: reflexion, ideas: ideas, traces: traces };
+  }
+
+  // ── Métriques d'un acteur sur une fenêtre ────────────────────────
+  //  Toutes les mesures sont RAPPORTÉES À LA FENÊTRE, sinon la comparaison
+  //  période / période précédente n'aurait aucun sens :
+  //   • reçues      = tâches qui lui ont été confiées pendant la fenêtre (charge)
+  //   • livrées     = tâches qu'il a clôturées pendant la fenêtre (production)
+  //   • taux        = part de la charge de la fenêtre déjà terminée
+  //   • ponctualité = part des livraisons faites dans les délais
+  //   • échéances manquées = dates limites tombées dans la fenêtre, non tenues
+  //   • pilotées    = tâches qu'il a confiées à d'autres pendant la fenêtre
+  //  Un rendu recalcule les mêmes couples (acteur, fenêtre) plusieurs fois — une
+  //  fois pour les cartes, une fois pour le tableau, une fois par point de courbe.
+  //  Ce cache, vidé à chaque rendu, évite de reparcourir state.tasks à chaque appel.
+  let _statsMemo = {};
+  function resetStatsMemo() { _statsMemo = {}; }
+  function actorTaskStats(name, w) {
+    const memoKey = name + "|" + w.from + "|" + w.to;
+    if (_statsMemo[memoKey]) return _statsMemo[memoKey];
+    const today = todayStr();
+    let recues = 0, terminees = 0, livrees = 0, ponctuelles = 0, manquees = 0,
+        sumDelai = 0, nDelai = 0, pilotees = 0, piloteesDone = 0;
+    state.tasks.forEach(t => {
+      const assignedIn = !!(t.dateAssigned && t.dateAssigned >= w.from && t.dateAssigned <= w.to);
+      if (t.recipient === name) {
+        if (assignedIn) {
+          recues++;
+          if (t.status === 'Terminé') terminees++;
+        }
+        if (t.status === 'Terminé' && t.closeDate && t.closeDate >= w.from && t.closeDate <= w.to) {
+          livrees++;
+          if (!t.dateLimit || t.closeDate <= t.dateLimit) ponctuelles++;
+          if (t.dateAssigned) { sumDelai += Math.max(0, daysBetween(t.dateAssigned, t.closeDate)); nDelai++; }
+        }
+        if (t.status !== 'Terminé' && t.dateLimit && t.dateLimit >= w.from
+            && t.dateLimit <= w.to && t.dateLimit < today) manquees++;
+      }
+      if (assignedIn && t.assignedByName === name && t.recipient !== name) {
+        pilotees++;
+        if (t.status === 'Terminé') piloteesDone++;
+      }
+    });
+    return (_statsMemo[memoKey] = {
+      recues: recues, terminees: terminees, livrees: livrees, manquees: manquees,
+      pilotees: pilotees, piloteesDone: piloteesDone,
+      taux: recues ? Math.round(terminees * 100 / recues) : 0,
+      ponctualite: livrees ? Math.round(ponctuelles * 100 / livrees) : 0,
+      delai: nDelai ? Math.round(sumDelai / nDelai) : 0,
+      _delaiSum: sumDelai, _delaiN: nDelai, _ponctuelles: ponctuelles
+    });
+  }
+  // Somme d'un groupe d'acteurs : les taux se recalculent sur les totaux, ils ne
+  // se moyennent pas (une moyenne de pourcentages donnerait le même poids à
+  // quelqu'un qui a 1 tâche qu'à quelqu'un qui en a 30).
+  function sumActorStats(list) {
+    const a = { recues:0, terminees:0, livrees:0, manquees:0, pilotees:0, piloteesDone:0,
+                _delaiSum:0, _delaiN:0, _ponctuelles:0, innovation:0, reflexion:0, ideas:0, traces:0 };
+    list.forEach(s => Object.keys(a).forEach(k => { a[k] += (s[k] || 0); }));
+    a.taux        = a.recues  ? Math.round(a.terminees * 100 / a.recues)      : 0;
+    a.ponctualite = a.livrees ? Math.round(a._ponctuelles * 100 / a.livrees)  : 0;
+    a.delai       = a._delaiN ? Math.round(a._delaiSum / a._delaiN)           : 0;
+    return a;
+  }
+  // Métriques complètes (tâches + activité) d'un acteur sur une fenêtre.
+  function actorFullStats(name, w) {
+    const s = actorTaskStats(name, w);
+    const act = activityScores(name, w);
+    s.innovation = act.innovation; s.reflexion = act.reflexion;
+    s.ideas = act.ideas; s.traces = act.traces;
+    return s;
+  }
+
+  // ── Rendu : deltas & mini-graphiques ─────────────────────────────
+  //  invert = true quand une BAISSE est une bonne nouvelle (retards, délai).
+  function deltaBadge(cur, prev, opts) {
+    opts = opts || {};
+    const unit = opts.unit || '';
+    cur = Number(cur) || 0; prev = Number(prev) || 0;
+    if (!cur && !prev) return '<span class="delta flat">—</span>';
+    // Rien à comparer : la période précédente était à zéro. On affiche la valeur
+    // brute plutôt qu'un pourcentage de progression infini.
+    if (!prev) return `<span class="delta ${opts.invert ? 'down' : 'up'}">▲ +${cur}${unit}</span>`;
+    const d = cur - prev;
+    if (d === 0) return '<span class="delta flat">= stable</span>';
+    const good = opts.invert ? d < 0 : d > 0;
+    const pct = opts.points ? '' : ' (' + Math.round(Math.abs(d) * 100 / Math.abs(prev)) + '%)';
+    return `<span class="delta ${good ? 'up' : 'down'}">${d > 0 ? '▲ +' : '▼ −'}${Math.abs(d)}${unit}${pct}</span>`;
+  }
+  // Écart en POINTS pour les pourcentages : « +7 pts », jamais « +7 % de 40 % ».
+  function deltaPoints(cur, prev, invert) {
+    return deltaBadge(cur, prev, { unit: ' pts', points: true, invert: !!invert });
+  }
+  // Un taux sans dénominateur n'est pas comparable : 0 tâche reçue ne vaut pas
+  // « 0 % de réussite ». Sans base des deux côtés, on n'affiche aucun écart.
+  function ratioDelta(cur, prev, curBase, prevBase, invert) {
+    if (!curBase || !prevBase) return '';
+    return deltaPoints(cur, prev, invert);
+  }
+  function sparkline(values, color) {
+    const vals = (values || []).map(v => Number(v) || 0);
+    if (!vals.length) return '';
+    const W = 96, H = 26, pad = 3;
+    const max = Math.max(1, ...vals);
+    const stepX = vals.length > 1 ? (W - pad * 2) / (vals.length - 1) : 0;
+    const x = i => pad + i * stepX;
+    const y = v => H - pad - (v / max) * (H - pad * 2);
+    const pts = vals.map((v, i) => x(i).toFixed(1) + ',' + y(v).toFixed(1)).join(' ');
+    const last = vals.length - 1;
+    return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
+      <polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.8"
+                stroke-linejoin="round" stroke-linecap="round" opacity=".85"/>
+      <circle cx="${x(last).toFixed(1)}" cy="${y(vals[last]).toFixed(1)}" r="2.8" fill="${color}"/>
+    </svg>`;
+  }
+  // Graphique multi-séries sur les fenêtres successives (même facture que
+  // buildEvolutionChart, mais indexé sur des périodes calendaires).
+  function buildPeriodChart(windows, series) {
+    if (!windows.length) return '<div class="empty">Aucune donnée</div>';
+    const niceMax = niceCeil(Math.max(1, ...series.map(s => Math.max(...s.values))));
+    const W = Math.max(520, windows.length * 95), H = 220;
+    const padL = 38, padR = 14, padT = 18, padB = 34;
+    const innerW = W - padL - padR, innerH = H - padT - padB;
+    const stepX = windows.length > 1 ? innerW / (windows.length - 1) : innerW;
+    const x = i => padL + i * stepX;
+    const y = v => padT + innerH - (v / niceMax) * innerH;
+
+    let svg = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" style="width:100%;height:auto;min-height:220px;max-width:${W}px;">`;
+    for (let i = 0; i <= 4; i++) {
+      const yy = padT + innerH * i / 4;
+      svg += `<line x1="${padL}" y1="${yy}" x2="${W - padR}" y2="${yy}" stroke="#e8eaed" stroke-width="1"/>`;
+      svg += `<text x="${padL - 6}" y="${yy + 4}" text-anchor="end" font-size="10" fill="#9aa0a6">${Math.round(niceMax * (1 - i / 4))}</text>`;
+    }
+    // La dernière fenêtre est en cours : on la signale, elle n'est pas comparable
+    // à plein régime avec les précédentes.
+    svg += `<rect x="${x(windows.length - 1) - stepX / 2}" y="${padT}" width="${stepX / 2}" height="${innerH}" fill="#f8f9fa"/>`;
+    windows.forEach((w, i) => {
+      svg += `<text x="${x(i)}" y="${H - padB + 15}" text-anchor="middle" font-size="10" fill="#5f6368">${escapeHtml(w.label)}</text>`;
+    });
+    series.forEach(s => {
+      svg += `<polyline points="${s.values.map((v, i) => x(i) + ',' + y(v)).join(' ')}" fill="none"
+               stroke="${s.color}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>`;
+      s.values.forEach((v, i) => {
+        svg += `<circle cx="${x(i)}" cy="${y(v)}" r="3.2" fill="${s.color}" stroke="#fff" stroke-width="1.5"/>`;
+        if (v > 0) svg += `<text x="${x(i)}" y="${y(v) - 8}" text-anchor="middle" font-size="9" fill="${s.color}" font-weight="600">${v}</text>`;
+      });
+    });
+    svg += '</svg>';
+    const legend = '<div class="chart-legend">' + series.map(s =>
+      `<span class="legend-item"><span class="legend-swatch" style="background:${s.color}"></span>${escapeHtml(s.label)}</span>`
+    ).join('') + '<span class="legend-item" style="color:#9aa0a6;">▨ période en cours (incomplète)</span></div>';
+    return legend + '<div class="evo-chart-wrap">' + svg + '</div>';
+  }
+
+  // ── Vue « Par niveau » ───────────────────────────────────────────
+  const LEVEL_HISTORY = 6;   // nombre de périodes affichées sur les courbes
+
+  async function renderLevels() {
+    showLoader('Chargement…');
+    const ok = await loadTasks();
+    await loadPersonnel();
+    hideLoader();
+    if (!ok) return;
+
+    const u = PERIOD_UNITS[state.levelUnit] || PERIOD_UNITS.week;
+    let html = `<div class="page-title">🪜 Évaluation par niveau hiérarchique</div>
+      <div class="page-sub">Les tâches lues par strate d'attribution, et l'évolution de chaque acteur d'une période à l'autre</div>
+      <div class="cmp-bar">
+        <span class="cmp-label">📊 Comparer par</span>
+        <select id="lvl-unit">
+          ${Object.keys(PERIOD_UNITS).map(k =>
+            `<option value="${k}" ${state.levelUnit === k ? 'selected' : ''}>${PERIOD_UNITS[k].label}</option>`).join('')}
+        </select>
+        <span class="cmp-window prev" id="lvl-win-prev">—</span>
+        <span class="cmp-arrow">→</span>
+        <span class="cmp-window" id="lvl-win-cur">—</span>
+        <span class="period-info" id="lvl-info">—</span>
+      </div>
+      <div id="lvl-tabs"></div>
+      <div id="lvl-body"></div>`;
+    $('main-content').innerHTML = html;
+
+    $('lvl-unit').onchange = e => {
+      state.levelUnit = e.target.value;
+      renderLevelTabs();
+      renderLevelBody();
+    };
+    renderLevelTabs();
+    renderLevelBody();
+  }
+
+  function renderLevelTabs() {
+    const el = $('lvl-tabs');
+    if (!el) return;
+    const people = activePersonnel();
+    const counts = {};
+    people.forEach(p => { const n = personLevel(p); counts[n] = (counts[n] || 0) + 1; });
+
+    let html = '<div class="lvl-tabs">';
+    html += `<button class="lvl-tab ${state.levelTab === 'all' ? 'active' : ''}" data-lvl="all">
+               <span class="lvl-n">TOUS</span>Vue d'ensemble<span class="lvl-cnt">${people.length}</span></button>`;
+    HIERARCHY_LEVELS.forEach(L => {
+      const c = counts[L.n] || 0;
+      const active = String(state.levelTab) === String(L.n);
+      html += `<button class="lvl-tab ${active ? 'active' : ''}" data-lvl="${L.n}"
+                 style="${active ? 'color:' + L.color + ';' : ''}" title="${escapeHtml(L.full)} — ${escapeHtml(L.desc)}">
+                 <span class="lvl-n">NIVEAU ${L.n}</span>${escapeHtml(L.label)}<span class="lvl-cnt">${c}</span></button>`;
+    });
+    html += '</div>';
+    el.innerHTML = html;
+    el.querySelectorAll('.lvl-tab').forEach(b => {
+      b.onclick = () => {
+        const v = b.dataset.lvl;
+        state.levelTab = v === 'all' ? 'all' : Number(v);
+        renderLevelTabs();
+        renderLevelBody();
+      };
+    });
+  }
+
+  function renderLevelBody() {
+    const body = $('lvl-body');
+    if (!body) return;
+    resetStatsMemo();
+    const unit = state.levelUnit;
+    const wins = periodWindows(unit, LEVEL_HISTORY);
+    const cur  = wins[wins.length - 1];
+    const prev = wins[wins.length - 2];
+
+    const winCur = $('lvl-win-cur'), winPrev = $('lvl-win-prev');
+    if (winCur)  winCur.textContent  = cur.longLabel;
+    if (winPrev) winPrev.textContent = prev.longLabel;
+
+    // Les compteurs d'activité couvrent tout l'historique affiché, en un appel.
+    const ready = ensureActivity(wins[0].from, cur.to, () => {
+      if (state.currentTab === 'Par niveau') renderLevelBody();
+    });
+
+    const people = activePersonnel();
+    const info = $('lvl-info');
+    if (info) info.textContent = ready
+      ? people.length + ' personne' + (people.length > 1 ? 's' : '') + ' · ' + LEVEL_HISTORY + ' ' + PERIOD_UNITS[unit].label.toLowerCase() + 's'
+      : 'Chargement de l’activité…';
+
+    body.innerHTML = (state.levelTab === 'all')
+      ? renderLevelOverview(wins, people, ready)
+      : renderLevelDetail(Number(state.levelTab), wins, people, ready);
+    wireLevelBody();
+  }
+
+  // Statistiques par niveau sur une fenêtre : { [n]: {stats, members:[…]} }
+  function levelStatsFor(people, w) {
+    const out = {};
+    HIERARCHY_LEVELS.forEach(L => { out[L.n] = { members: [], stats: null }; });
+    people.forEach(p => {
+      const n = personLevel(p);
+      const s = actorFullStats(p.name, w);
+      s.person = p;
+      out[n].members.push(s);
+    });
+    HIERARCHY_LEVELS.forEach(L => { out[L.n].stats = sumActorStats(out[L.n].members); });
+    return out;
+  }
+
+  // Carte KPI non cliquable portant son écart avec la période précédente.
+  function cmpCard(label, value, sub, mod, delta) {
+    return `<div class="kpi-card kpi-static ${mod || ''}">
+      <div class="kpi-label">${label}</div><div class="kpi-value">${value}</div>
+      ${sub ? `<div class="kpi-sub">${sub}</div>` : ''}${delta || ''}</div>`;
+  }
+
+  //  Cellule « innovation » / « réflexion ». L'écart n'est affiché que s'il y a
+  //  quelque chose à comparer : « · — » sur une ligne vide n'apprend rien.
+  function activityCell(value, ready, cls, prevValue) {
+    if (!ready) return '<span class="evo-cell empty">…</span>';
+    if (!state.activity.available) return '<span class="evo-cell empty" title="Migration 0019 non appliquée">—</span>';
+    const cell = `<span class="evo-cell ${value ? cls : 'empty'}">${value || '·'}</span>`;
+    if (prevValue == null || (!value && !prevValue)) return cell;
+    return cell + ' ' + deltaBadge(value, prevValue);
+  }
+
+  function renderLevelOverview(wins, people, ready) {
+    const cur = wins[wins.length - 1], prev = wins[wins.length - 2];
+    const byLvlCur  = levelStatsFor(people, cur);
+    const byLvlPrev = levelStatsFor(people, prev);
+    const totCur  = sumActorStats(HIERARCHY_LEVELS.map(L => byLvlCur[L.n].stats));
+    const totPrev = sumActorStats(HIERARCHY_LEVELS.map(L => byLvlPrev[L.n].stats));
+
+    // Cartes globales, chacune avec son écart sur la période précédente.
+    const card = cmpCard;
+    let html = '<div class="kpi-grid">';
+    html += card('Tâches reçues', totCur.recues, 'confiées pendant la période', '',
+                 deltaBadge(totCur.recues, totPrev.recues));
+    html += card('Livrées', totCur.livrees, 'clôturées pendant la période',
+                 totCur.livrees >= totPrev.livrees ? 'ok' : '', deltaBadge(totCur.livrees, totPrev.livrees));
+    html += card('Taux de complétion', totCur.recues ? totCur.taux + '%' : '—', 'sur la charge de la période',
+                 !totCur.recues ? '' : totCur.taux >= 70 ? 'ok' : totCur.taux >= 40 ? 'warn' : 'danger',
+                 ratioDelta(totCur.taux, totPrev.taux, totCur.recues, totPrev.recues));
+    html += card('Ponctualité', totCur.livrees ? totCur.ponctualite + '%' : '—', 'livraisons dans les délais',
+                 !totCur.livrees ? '' : totCur.ponctualite >= 70 ? 'ok' : totCur.ponctualite >= 40 ? 'warn' : 'danger',
+                 ratioDelta(totCur.ponctualite, totPrev.ponctualite, totCur.livrees, totPrev.livrees));
+    html += card('Échéances manquées', totCur.manquees, 'dates limites non tenues',
+                 totCur.manquees > 0 ? 'danger' : 'ok', deltaBadge(totCur.manquees, totPrev.manquees, { invert: true }));
+    html += card('Délai moyen', totCur.delai ? totCur.delai + 'j' : '—', 'de l’attribution à la clôture', '',
+                 totCur.delai || totPrev.delai ? deltaBadge(totCur.delai, totPrev.delai, { unit: 'j', invert: true }) : '');
+    if (ready && state.activity.available) {
+      html += card('💡 Innovation', totCur.innovation, totCur.ideas + ' idée(s) déposée(s)',
+                   totCur.innovation > 0 ? 'ok' : '', deltaBadge(totCur.innovation, totPrev.innovation));
+      html += card('🧠 Réflexion', totCur.reflexion, totCur.traces + ' contribution(s) écrite(s)',
+                   totCur.reflexion > 0 ? 'ok' : '', deltaBadge(totCur.reflexion, totPrev.reflexion));
+    }
+    html += '</div>';
+
+    // Tableau : une ligne par niveau, avec la courbe des livraisons.
+    html += `<div class="dash-section"><h3>🪜 Comparaison des niveaux <span class="count">6</span></h3>
+      <div class="table-wrap" style="border:none;"><table><thead><tr>
+        <th>Niveau</th><th>Effectif</th><th>Reçues</th><th>Livrées</th><th>Évolution</th>
+        <th>Taux</th><th>Ponctualité</th><th>Manquées</th><th>Délai</th><th>💡 Innov.</th><th>🧠 Réflex.</th>
+      </tr></thead><tbody>`;
+    HIERARCHY_LEVELS.forEach(L => {
+      const c = byLvlCur[L.n].stats, p = byLvlPrev[L.n].stats;
+      const eff = byLvlCur[L.n].members.length;
+      const hist = wins.map(w => sumActorStats(
+        people.filter(x => personLevel(x) === L.n).map(x => actorFullStats(x.name, w))
+      ).livrees);
+      const tauxMod = c.taux >= 70 ? 'ok' : c.taux >= 40 ? 'warn' : (c.recues ? 'danger' : 'empty');
+      html += `<tr class="lvl-row-clickable" style="cursor:pointer;" data-lvl="${L.n}">
+        <td data-label="Niveau"><strong style="color:${L.color}">N${L.n} · ${escapeHtml(L.label)}</strong></td>
+        <td data-label="Effectif">${eff}</td>
+        <td data-label="Reçues">${c.recues} ${deltaBadge(c.recues, p.recues)}</td>
+        <td data-label="Livrées"><strong>${c.livrees}</strong> ${deltaBadge(c.livrees, p.livrees)}</td>
+        <td data-label="Évolution">${sparkline(hist, L.color)}</td>
+        <td data-label="Taux"><span class="evo-cell ${tauxMod}">${c.recues ? c.taux + '%' : '·'}</span>
+            ${c.recues && p.recues ? deltaPoints(c.taux, p.taux) : ''}</td>
+        <td data-label="Ponctualité">${c.livrees ? c.ponctualite + '%' : '<span class="evo-cell empty">·</span>'}</td>
+        <td data-label="Manquées">${c.manquees ? '<span class="badge badge-overdue">' + c.manquees + '</span>' : '—'}</td>
+        <td data-label="Délai">${c.delai ? c.delai + 'j' : '—'}</td>
+        <td data-label="Innovation">${activityCell(c.innovation, ready, 'info', p.innovation)}</td>
+        <td data-label="Réflexion">${activityCell(c.reflexion, ready, 'info', p.reflexion)}</td>
+      </tr>`;
+    });
+    html += '</tbody></table></div></div>';
+
+    // Courbe d'ensemble
+    html += `<div class="dash-section"><h3>📈 Évolution de l'entreprise sur ${LEVEL_HISTORY} ${PERIOD_UNITS[state.levelUnit].label.toLowerCase()}s</h3>`;
+    const allHist = wins.map(w => sumActorStats(people.map(x => actorFullStats(x.name, w))));
+    html += buildPeriodChart(wins, [
+      { label: 'Reçues',   color: '#1a73e8', values: allHist.map(s => s.recues) },
+      { label: 'Livrées',  color: '#137333', values: allHist.map(s => s.livrees) },
+      { label: 'Échéances manquées', color: '#c5221f', values: allHist.map(s => s.manquees) }
+    ]);
+    html += '</div>';
+    html += levelMethodNote(ready);
+    return html;
+  }
+
+  function renderLevelDetail(n, wins, people, ready) {
+    const L = levelDef(n);
+    const cur = wins[wins.length - 1], prev = wins[wins.length - 2];
+    const members = people.filter(p => personLevel(p) === n);
+
+    let html = `<div class="lvl-head" style="background:${L.grad}">
+      <h3>Niveau ${L.n} — ${escapeHtml(L.full)}</h3>
+      <div class="lvl-sub">${escapeHtml(L.desc)} · ${members.length} personne${members.length > 1 ? 's' : ''} · ${escapeHtml(cur.longLabel)}</div>
+    </div>`;
+
+    if (!members.length) {
+      return html + '<div class="empty-state"><div class="icon">🫥</div><h4>Personne à ce niveau</h4>'
+        + '<p>Aucun membre du personnel actif n’est classé ici pour l’instant.</p></div>' + levelMethodNote(ready);
+    }
+
+    const statsCur  = members.map(p => { const s = actorFullStats(p.name, cur);  s.person = p; return s; });
+    const statsPrev = {};
+    members.forEach(p => { statsPrev[p.name] = actorFullStats(p.name, prev); });
+    const totCur  = sumActorStats(statsCur);
+    const totPrev = sumActorStats(members.map(p => statsPrev[p.name]));
+
+    const card = cmpCard;
+    html += '<div class="kpi-grid">';
+    html += card('Reçues', totCur.recues, '', '', deltaBadge(totCur.recues, totPrev.recues));
+    html += card('Livrées', totCur.livrees, '', totCur.livrees >= totPrev.livrees ? 'ok' : '',
+                 deltaBadge(totCur.livrees, totPrev.livrees));
+    html += card('Taux', totCur.recues ? totCur.taux + '%' : '—', 'de la charge terminée',
+                 !totCur.recues ? '' : totCur.taux >= 70 ? 'ok' : totCur.taux >= 40 ? 'warn' : 'danger',
+                 ratioDelta(totCur.taux, totPrev.taux, totCur.recues, totPrev.recues));
+    html += card('Ponctualité', totCur.livrees ? totCur.ponctualite + '%' : '—', 'livrées dans les délais',
+                 !totCur.livrees ? '' : totCur.ponctualite >= 70 ? 'ok' : 'warn',
+                 ratioDelta(totCur.ponctualite, totPrev.ponctualite, totCur.livrees, totPrev.livrees));
+    html += card('Manquées', totCur.manquees, '', totCur.manquees ? 'danger' : 'ok',
+                 deltaBadge(totCur.manquees, totPrev.manquees, { invert: true }));
+    html += card('Pilotage', totCur.pilotees, 'tâches confiées à d’autres', '',
+                 deltaBadge(totCur.pilotees, totPrev.pilotees));
+    if (ready && state.activity.available) {
+      html += card('💡 Innovation', totCur.innovation, totCur.ideas + ' idée(s)', totCur.innovation ? 'ok' : '',
+                   deltaBadge(totCur.innovation, totPrev.innovation));
+      html += card('🧠 Réflexion', totCur.reflexion, totCur.traces + ' contribution(s)', totCur.reflexion ? 'ok' : '',
+                   deltaBadge(totCur.reflexion, totPrev.reflexion));
+    }
+    html += '</div>';
+
+    const hist = wins.map(w => sumActorStats(members.map(p => actorFullStats(p.name, w))));
+    html += `<div class="dash-section"><h3>📈 Évolution du niveau ${L.n}</h3>`;
+    html += buildPeriodChart(wins, [
+      { label: 'Reçues',  color: '#1a73e8', values: hist.map(s => s.recues) },
+      { label: 'Livrées', color: L.color,   values: hist.map(s => s.livrees) },
+      { label: 'Manquées', color: '#c5221f', values: hist.map(s => s.manquees) }
+    ]);
+    html += '</div>';
+
+    // Tableau des acteurs — trié par production, puis par charge.
+    const canFix = state.user.role === 'chef' || state.user.role === 'rh';
+    statsCur.sort((a, b) => (b.livrees - a.livrees) || (b.recues - a.recues) || a.person.name.localeCompare(b.person.name));
+
+    html += `<div class="dash-section"><h3>👥 Acteurs du niveau ${L.n} <span class="count">${members.length}</span></h3>
+      <div class="table-wrap" style="border:none;"><table><thead><tr>
+        <th>Acteur</th><th>Reçues</th><th>Livrées</th><th>Courbe</th><th>Taux</th>
+        <th>Ponctualité</th><th>Manquées</th><th>Délai</th><th>Pilotage</th>
+        <th>💡 Innov.</th><th>🧠 Réflex.</th>${canFix ? '<th>Niveau</th>' : ''}
+      </tr></thead><tbody>`;
+    statsCur.forEach(s => {
+      const p = s.person, pv = statsPrev[p.name];
+      const curve = wins.map(w => actorTaskStats(p.name, w).livrees);
+      const tauxMod = s.taux >= 70 ? 'ok' : s.taux >= 40 ? 'warn' : (s.recues ? 'danger' : 'empty');
+      const auto = autoHierarchyLevel(p);
+      html += `<tr>
+        <td data-label="Acteur">
+          <div class="lvl-actor-name lvl-actor-open" style="cursor:pointer;" data-emp="${escapeHtml(p.name)}">
+            <strong style="color:#1557b0;">${escapeHtml(p.name)}</strong>
+            <span class="fn">${escapeHtml(p.position || p.role || '—')}${p.dept ? ' · ' + escapeHtml(p.dept) : ''}</span>
+          </div></td>
+        <td data-label="Reçues">${s.recues} ${deltaBadge(s.recues, pv.recues)}</td>
+        <td data-label="Livrées"><strong>${s.livrees}</strong> ${deltaBadge(s.livrees, pv.livrees)}</td>
+        <td data-label="Courbe">${sparkline(curve, L.color)}</td>
+        <td data-label="Taux"><span class="evo-cell ${tauxMod}">${s.recues ? s.taux + '%' : '·'}</span></td>
+        <td data-label="Ponctualité">${s.livrees ? s.ponctualite + '%' : '<span class="evo-cell empty">·</span>'}</td>
+        <td data-label="Manquées">${s.manquees ? '<span class="badge badge-overdue">' + s.manquees + '</span>' : '—'}</td>
+        <td data-label="Délai">${s.delai ? s.delai + 'j' : '—'}</td>
+        <td data-label="Pilotage">${s.pilotees || '—'}</td>
+        <td data-label="Innovation">${activityCell(s.innovation, ready, 'info', pv.innovation)}</td>
+        <td data-label="Réflexion">${activityCell(s.reflexion, ready, 'info', pv.reflexion)}</td>
+        ${canFix ? `<td data-label="Niveau">
+          <select class="lvl-fix" data-person="${escapeHtml(p.id || '')}"
+                  data-prev="${Number(p.hierarchyLevel) >= 1 ? Number(p.hierarchyLevel) : ''}"
+                  title="Corriger le niveau d’attribution — « Auto » revient à la déduction depuis la fonction déclarée">
+            <option value="">Auto (N${auto})</option>
+            ${HIERARCHY_LEVELS.map(x => `<option value="${x.n}" ${Number(p.hierarchyLevel) === x.n ? 'selected' : ''}>N${x.n} · ${escapeHtml(x.label)}</option>`).join('')}
+          </select></td>` : ''}
+      </tr>`;
+    });
+    html += '</tbody></table></div></div>';
+    html += levelMethodNote(ready);
+    return html;
+  }
+
+  // Le calcul doit rester lisible et contestable : on l'écrit sous le tableau.
+  function levelMethodNote(ready) {
+    const unavailable = ready && !state.activity.available;
+    return `<div class="lvl-note">
+      <strong>Comment ces chiffres sont calculés.</strong><br>
+      <strong>Reçues</strong> : tâches confiées à la personne pendant la période ·
+      <strong>Livrées</strong> : tâches qu'elle a clôturées pendant la période ·
+      <strong>Taux</strong> : part des reçues déjà terminées ·
+      <strong>Ponctualité</strong> : part des livraisons faites au plus tard à l'échéance ·
+      <strong>Manquées</strong> : échéances tombées dans la période sans que la tâche soit terminée ·
+      <strong>Pilotage</strong> : tâches confiées à d'autres.<br>
+      <strong>💡 Innovation</strong> = <code>4×idée retenue + 2×idée à l'étude + 1×idée nouvelle ou écartée</code>
+      (le statut retenu est celui d'aujourd'hui, pas celui du jour du dépôt).<br>
+      <strong>🧠 Réflexion</strong> = <code>4×rapport + 2×objectif posé + 1×commentaire (tâche, idée, objectif)</code>.<br>
+      Les périodes sont <strong>calendaires</strong> (semaine du lundi au dimanche, mois, trimestre, semestre, année civile) :
+      la période en cours est forcément incomplète, c'est pourquoi elle est grisée sur les courbes.<br>
+      Le niveau est déduit de la fonction déclarée ; le Chef et la DA-RH peuvent le corriger acteur par acteur.
+      ${unavailable ? '<br><span style="color:#b06000;"><strong>⚠ Innovation et Réflexion indisponibles</strong> — la migration <code>0019_hierarchy_levels.sql</code> n\'est pas encore appliquée sur la base. Les indicateurs de tâches, eux, restent exacts.</span>' : ''}
+    </div>`;
+  }
+
+  function wireLevelBody() {
+    const body = $('lvl-body');
+    if (!body) return;
+    body.querySelectorAll('.lvl-row-clickable').forEach(row => {
+      row.onclick = () => { state.levelTab = Number(row.dataset.lvl); renderLevelTabs(); renderLevelBody(); };
+    });
+    // Ouvre la fiche détaillée (mêmes 3 groupes que « Par employé »), calée sur
+    // la fenêtre calendaire affichée et non sur la période de l'onglet employé.
+    body.querySelectorAll('.lvl-actor-open').forEach(el => {
+      el.onclick = () => openLevelActorDetail(el.dataset.emp);
+    });
+    body.querySelectorAll('.lvl-fix').forEach(sel => {
+      sel.onchange = () => saveHierarchyLevel(sel.dataset.person, sel.value, sel);
+    });
+  }
+
+  // La fiche employé s'appuie sur state.periods[key] : on y projette la fenêtre
+  // calendaire courante via une période « custom », le temps de l'ouvrir.
+  function openLevelActorDetail(name) {
+    if (!name) return;
+    const w = periodWindow(state.levelUnit, 0);
+    state.periods.level = { mode: 'custom', from: w.from, to: w.to };
+    openEmpDetail(name, 'level');
+  }
+
+  async function saveHierarchyLevel(personId, value, selectEl) {
+    if (!personId) { toast('Personne sans identifiant — rechargez la page.', 'error'); return; }
+    const previous = selectEl ? selectEl.getAttribute('data-prev') || '' : '';
+    if (selectEl) selectEl.disabled = true;
+    const res = await call('setHierarchyLevel', URL_TOKEN, personId, value === '' ? null : Number(value));
+    if (selectEl) selectEl.disabled = false;
+    if (!res || !res.success) {
+      toast((res && res.error) || 'Échec de la modification du niveau', 'error');
+      if (selectEl) selectEl.value = previous;
+      return;
+    }
+    const p = state.personnel.find(x => x.id === personId);
+    if (p) p.hierarchyLevel = res.level;
+    toast('Niveau mis à jour', 'success');
+    renderLevelTabs();
+    renderLevelBody();
   }
 
   // ═════════════════════════════════════════════════════════════════

@@ -33,7 +33,7 @@ export async function authenticate(token) {
   // ✨ v7.0 : l'UI est partagée avec l'app Apps Script d'origine, qui n'a pas ces
   // handlers. Ce drapeau lui dit quels écrans cette plateforme sait servir ; sous
   // Apps Script il n'existe pas, et les écrans concernés restent masqués.
-  user.features = { innovation: true, resendLink: true };
+  user.features = { innovation: true, resendLink: true, hierarchy: true };
   return data;
 }
 
@@ -121,10 +121,19 @@ async function loadTasks() {
   return tasks;
 }
 
+// ✨ v7.1 : `hierarchy_level` n'existe qu'après la migration 0019. Tant qu'elle
+// n'est pas appliquée, PostgREST répond « column does not exist » (42703) et
+// ferait échouer bootstrapApp — donc toute l'application. On retente sans la
+// colonne : l'écran « Par niveau » retombe alors sur la déduction automatique.
+const PERSONNEL_COLS = "id,name,email,dept,position,role_raw,role_norm,status";
+
 async function loadPersonnel() {
-  const { data, error } = await db
+  let { data, error } = await db
     .from("personnel")
-    .select("id,name,email,dept,position,role_raw,role_norm,status");
+    .select(PERSONNEL_COLS + ",hierarchy_level");
+  if (error && (error.code === "42703" || /hierarchy_level/.test(error.message || ""))) {
+    ({ data, error } = await db.from("personnel").select(PERSONNEL_COLS));
+  }
   if (error) throw error;
 
   // ✨ v7.0 : le Chef et la DA-RH récupèrent les tokens pour pouvoir réafficher et
@@ -140,6 +149,8 @@ async function loadPersonnel() {
   return (data || []).map((p) => ({
     id: p.id, num: "", name: p.name, email: p.email, dept: p.dept, position: p.position,
     role: p.role_raw, roleNorm: p.role_norm, status: p.status,
+    // null/absent = niveau déduit côté client (cf. autoHierarchyLevel dans l'UI)
+    hierarchyLevel: p.hierarchy_level == null ? null : Number(p.hierarchy_level),
     token: tokens[p.id] || "", startDate: "",
   }));
 }
@@ -1347,6 +1358,54 @@ Object.assign(handlers, {
     const { error } = await db.from("innovation_comments").delete().eq("id", commentId);
     if (error) return { success: false, error: error.message };
     return { success: true };
+  },
+});
+
+// ── ✨ v7.1 : évaluation par niveau hiérarchique ─────────────────────
+Object.assign(handlers, {
+  // Compteurs d'activité (auteur × type × jour) sur une fenêtre de dates, servis
+  // par la RPC SECURITY DEFINER activity_events (cf. migration 0019). Les tâches
+  // ne sont PAS incluses : l'UI les a déjà en mémoire et sait les découper.
+  //
+  // `available: false` (migration pas encore appliquée) n'est pas une erreur :
+  // l'écran affiche alors « — » pour innovation/réflexion et garde les
+  // indicateurs de tâches, qui eux ne dépendent de rien.
+  async getActivityEvents(_t, from, to) {
+    if (!from || !to) return { success: false, error: "Période invalide." };
+    const { data, error } = await db.rpc("activity_events", { p_from: from, p_to: to });
+    if (error) {
+      // 42883 = function does not exist ; PGRST202 = introuvable dans le cache PostgREST
+      if (error.code === "42883" || error.code === "PGRST202" || /activity_events/.test(error.message || "")) {
+        return { success: true, available: false, events: [] };
+      }
+      return { success: false, error: friendlyError(error, "Statistiques d'activité indisponibles.") };
+    }
+    return {
+      success: true,
+      available: true,
+      events: (data || []).map((r) => ({
+        author: r.author_name || "", kind: r.kind, date: r.event_date, n: Number(r.n || 0),
+      })),
+    };
+  },
+
+  // Corrige à la main le niveau d'attribution d'une personne (Chef / DA-RH).
+  // level = null → on revient à la déduction automatique.
+  async setHierarchyLevel(_t, personId, level) {
+    if (user.role !== "chef" && user.role !== "rh") {
+      return { success: false, error: "Seuls le Chef et la DA-RH peuvent corriger un niveau." };
+    }
+    if (!personId) return { success: false, error: "Personne introuvable." };
+    const lvl = level == null || level === "" ? null : Number(level);
+    if (lvl !== null && !(lvl >= 1 && lvl <= 6)) return { success: false, error: "Niveau hors bornes (1 à 6)." };
+    const { error } = await db.from("personnel").update({ hierarchy_level: lvl }).eq("id", personId);
+    if (error) {
+      if (error.code === "42703") {
+        return { success: false, error: "Migration 0019 non appliquée : la colonne hierarchy_level n'existe pas encore." };
+      }
+      return { success: false, error: friendlyError(error, "Modification du niveau refusée.") };
+    }
+    return { success: true, level: lvl };
   },
 });
 
