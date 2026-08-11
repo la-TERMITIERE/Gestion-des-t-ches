@@ -188,6 +188,56 @@ Deno.serve(async (req) => {
       return json({ ok: true });
     }
 
+    // ✨ v7.2 : diffusion d'INFORMATION (pas d'action attendue) autour d'une demande
+    //  de versement. Deux publics, tenus par le paramétrage (table
+    //  salary_notify_recipients, réglée par le Chef / la DA-RH depuis l'onglet) :
+    //    • moment 'request'  → ceux qui ont coché « à l'initiation »
+    //    • moment 'decision' → ceux qui ont coché « aux décisions »
+    //  Le bénéficiaire est prévenu dans tous les cas : c'est sa demande.
+    //  Les acteurs du circuit continuent de recevoir leur e-mail « action requise »
+    //  par salary_stage — ce type-ci ne le remplace pas, il s'y ajoute.
+    if (t === "salary_announce") {
+      const moment = b.moment === "decision" ? "decision" : "request";
+      const col = moment === "decision" ? "on_decision" : "on_request";
+      const { data: recips } = await admin
+        .from("salary_notify_recipients").select("person_id, person_name").eq(col, true);
+
+      // Dédoublonnage par nom : le bénéficiaire peut aussi figurer dans la liste.
+      const names = new Set<string>((recips || []).map((r) => String(r.person_name || "")).filter(Boolean));
+      if (b.person) names.add(String(b.person));
+
+      const autorise = b.outcome === "autorise";
+      const rejete   = b.outcome === "rejete";
+      const color = moment === "request" ? "#0a8043" : autorise ? "#137333" : rejete ? "#c5221f" : "#0a8043";
+      const title = moment === "request" ? "💰 Demande de versement initiée"
+                  : autorise ? "✅ Versement de salaire autorisé" : "❌ Demande de versement rejetée";
+
+      const details = `${b.periode ? `<p>Période : <strong>${esc(b.periode)}</strong></p>` : ""}` +
+                      `${b.montant ? `<p>Montant : <strong>${esc(b.montant)}</strong></p>` : ""}`;
+
+      for (const name of names) {
+        const p = await person(name);
+        if (!p || !p.email) continue;
+        // Le bénéficiaire lit « pour vous » ; les autres lisent son nom.
+        const cible = p.name === b.person ? "vous" : `<strong>${esc(b.person)}</strong>`;
+        const corps = moment === "request"
+          ? `<p>Une demande d'autorisation de versement de salaire vient d'être initiée pour ${cible}${
+              b.requestedBy ? ` par <strong>${esc(b.requestedBy)}</strong>` : ""}.</p>${details}
+             <p style="font-size:13px;color:#5f6368;">Elle suit maintenant le circuit : validation (DF) → approbation (GE) → autorisation (PAU).</p>`
+          : autorise
+            ? `<p>Le versement concernant ${cible} a été <strong>autorisé</strong>. Le circuit est complet.</p>${details}`
+            : `<p>La demande concernant ${cible} a été <strong>rejetée</strong> par ${esc(actor)}.</p>
+               ${b.reason ? `<p>Motif : <em>${esc(b.reason)}</em></p>` : ""}`;
+
+        const html = shell(title, color, p.name, corps,
+          link(p.token, undefined, "salary"), "Ouvrir le suivi");
+        // Objet = texte brut : pas de esc(), qui y laisserait des « &amp; ».
+        await sendMail(p.email, `[${APP_NAME}] ${title} — ${b.person}`, html,
+          `${title} — ${b.person}\n${link(p.token, undefined, "salary")}`);
+      }
+      return json({ ok: true });
+    }
+
     if (t === "innovation_status") {
       const p = await person(b.author);
       if (!p || !p.email || p.name === actor) return json({ ok: true });

@@ -33,7 +33,7 @@ export async function authenticate(token) {
   // ✨ v7.0 : l'UI est partagée avec l'app Apps Script d'origine, qui n'a pas ces
   // handlers. Ce drapeau lui dit quels écrans cette plateforme sait servir ; sous
   // Apps Script il n'existe pas, et les écrans concernés restent masqués.
-  user.features = { innovation: true, resendLink: true, hierarchy: true };
+  user.features = { innovation: true, resendLink: true, hierarchy: true, salarySelf: true };
   return data;
 }
 
@@ -829,39 +829,65 @@ const randomToken = () => {
 
 Object.assign(handlers, {
   // ── Autorisation salaire ────────────────────────────────────────────
+  // ✨ v7.2 : l'onglet est ouvert à tout le personnel, mais la PORTÉE change.
+  //  • acteurs du circuit (RH/DF/GE/PAU) + Chef → toute la liste, comme avant ;
+  //  • tout le reste du personnel → sa seule ligne, pour demander et suivre.
+  //  Ce n'est pas qu'un filtre d'affichage : la policy salary_select (0020) pose
+  //  la même limite en base, donc un employé ne peut pas aller lire les montants
+  //  des autres en contournant l'UI.
   async getSalaryAuthorizations() {
     const viewerFn = user.salaryRole;
     const isAdmin = user.role === "chef";
-    if (!viewerFn && !isAdmin)
-      return { success: false, error: "Accès refusé : onglet réservé à la RH, au DF, à la GE, à la PAU et aux administrateurs." };
+    const seesEveryone = !!viewerFn || isAdmin;
+
     const [{ data: auths }, { data: ext }, personnel] = await Promise.all([
       db.from("salary_authorizations").select("*"),
-      db.from("salary_external_beneficiaries").select("*").eq("active", true),
+      seesEveryone
+        ? db.from("salary_external_beneficiaries").select("*").eq("active", true)
+        : Promise.resolve({ data: [] }),
       loadPersonnel(),
     ]);
     const latest = {};
     (auths || []).forEach((a) => { latest[a.person] = a; }); // dernière occurrence
-    const internal = personnel.filter((p) => (p.status || "").toLowerCase() !== "inactif")
+
+    const active = personnel.filter((p) => (p.status || "").toLowerCase() !== "inactif");
+    const mine = active.filter((p) => p.name === user.name);
+    const internal = (seesEveryone ? active : mine)
       .map((p) => ({ person: p.name, dept: p.dept || "", fonction: p.role || "", isExternal: false }));
     const external = (ext || []).map((b) => ({ person: b.name, dept: b.structure || "", fonction: b.structure || "Externe", isExternal: true }));
+
     const rows = internal.concat(external).map((p) => {
       const a = latest[p.person] || null;
       const key = a ? salaryStatusKey(a.status) : "none";
+      const closed = !a || key === "autorise" || key === "rejete";
+      // Deux règles, dans cet ordre. D'abord l'action du circuit, qui prime : si
+      // le DF a une validation en attente sur cette ligne, c'est ça qu'on lui
+      // montre. Ensuite « demander », ouvert à la DA-RH pour n'importe qui et à
+      // TOUT LE MONDE pour sa propre ligne — Chef et acteurs du circuit compris,
+      // qui restent des salariés.
       let myAction = null;
-      if (viewerFn === "rh") { if (!a || key === "autorise" || key === "rejete") myAction = "demander"; }
-      else if (viewerFn === "df" && key === "demande") myAction = "valider";
+      if (viewerFn === "df" && key === "demande") myAction = "valider";
       else if (viewerFn === "ge" && key === "valide") myAction = "approuver";
       else if (viewerFn === "pau" && key === "approuve") myAction = "autoriser";
+      else if (closed && (viewerFn === "rh" || p.person === user.name)) myAction = "demander";
       return { person: p.person, dept: p.dept, fonction: p.fonction, isExternal: p.isExternal,
+        isMe: p.person === user.name,
         auth: a ? salaryAuthObj(a) : null, statusKey: key, statusLabel: salaryStatusLabel(key), myAction };
     });
-    return { success: true, user, viewerFunction: viewerFn, isAdmin, rows };
+    return {
+      success: true, user, viewerFunction: viewerFn, isAdmin, rows,
+      scope: seesEveryone ? "all" : "self",
+      canSetNotify: isAdmin || viewerFn === "rh",
+    };
   },
 
   async createSalaryRequest(_t, payload) {
-    if (user.salaryRole !== "rh") return { success: false, error: "Seule la DA-RH peut initier une demande." };
     const person = norm(payload && payload.person);
     if (!person) return { success: false, error: "Personne obligatoire." };
+    // ✨ v7.2 : la DA-RH demande pour qui elle veut, chacun pour lui-même.
+    if (user.salaryRole !== "rh" && person !== user.name) {
+      return { success: false, error: "Vous ne pouvez initier une demande que pour vous-même." };
+    }
     const isInternal = !!(await personByName(person));
     const { data: ext } = await db.from("salary_external_beneficiaries").select("name").eq("active", true).eq("name", person);
     if (!isInternal && !(ext && ext.length))
@@ -875,8 +901,15 @@ Object.assign(handlers, {
       id, person, periode: norm(payload.periode), montant: norm(payload.montant), status: "Demandé",
       requested_by: user.name, requested_at: new Date().toISOString(), note: norm(payload.note),
     });
-    if (error) return { success: false, error: error.message };
+    if (error) return { success: false, error: friendlyError(error, "Création de la demande refusée.") };
+    // Le DF est l'acteur suivant : il doit agir.
     notify("salary_stage", { target: "df", person, periode: norm(payload.periode), montant: norm(payload.montant) });
+    // ✨ v7.2 : information (et non action) — le bénéficiaire, plus les personnes
+    // inscrites dans le paramétrage. La liste est lue côté Edge Function.
+    notify("salary_announce", {
+      moment: "request", person, periode: norm(payload.periode),
+      montant: norm(payload.montant), requestedBy: user.name,
+    });
     return { success: true, id };
   },
 
@@ -914,6 +947,14 @@ Object.assign(handlers, {
     else if (act === "valider") notify("salary_stage", { target: "ge", person: obj.person, periode: obj.periode, montant: obj.montant });
     else if (act === "approuver") notify("salary_stage", { target: "pau", person: obj.person, periode: obj.periode, montant: obj.montant });
     else if (act === "autoriser") notify("salary_final", { person: obj.person });
+    // ✨ v7.2 : l'issue du circuit intéresse au-delà de ses acteurs — diffusée aux
+    // personnes qui ont coché « décisions » dans le paramétrage.
+    if (act === "autoriser" || act === "rejeter") {
+      notify("salary_announce", {
+        moment: "decision", person: obj.person, periode: obj.periode, montant: obj.montant,
+        outcome: act === "autoriser" ? "autorise" : "rejete", reason,
+      });
+    }
     return { success: true };
   },
 
@@ -930,6 +971,66 @@ Object.assign(handlers, {
     });
     if (error) return { success: false, error: error.message };
     return { success: true };
+  },
+
+  // ── ✨ v7.2 : paramétrage « qui est prévenu » ──────────────────────
+  //  Réservé au Chef et à la DA-RH (la policy salnotify_* pose la même limite).
+  //  Renvoie TOUT le personnel actif avec ses deux cases, pour que l'écran soit
+  //  une liste à cocher et non un formulaire d'ajout à l'aveugle.
+  async getSalaryNotifySettings() {
+    const isAdmin = user.role === "chef";
+    if (!isAdmin && user.salaryRole !== "rh") {
+      return { success: false, error: "Paramétrage réservé au Chef et à la DA-RH." };
+    }
+    const [{ data: recips, error }, personnel] = await Promise.all([
+      db.from("salary_notify_recipients").select("*"),
+      loadPersonnel(),
+    ]);
+    if (error) {
+      // Table absente = migration 0020 pas encore appliquée : on le dit clairement
+      // plutôt que de laisser un écran vide qu'on croirait « bien réglé ».
+      if (error.code === "42P01") return { success: true, available: false, people: [] };
+      return { success: false, error: friendlyError(error, "Paramétrage illisible.") };
+    }
+    const by = {};
+    (recips || []).forEach((r) => { by[r.person_id] = r; });
+    const people = personnel
+      .filter((p) => (p.status || "").toLowerCase() !== "inactif")
+      .map((p) => ({
+        id: p.id, name: p.name, dept: p.dept || "", fonction: p.role || "", email: p.email || "",
+        onRequest:  !!(by[p.id] && by[p.id].on_request),
+        onDecision: !!(by[p.id] && by[p.id].on_decision),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    return { success: true, available: true, people };
+  },
+
+  async setSalaryNotifyRecipient(_t, personId, onRequest, onDecision) {
+    const isAdmin = user.role === "chef";
+    if (!isAdmin && user.salaryRole !== "rh") {
+      return { success: false, error: "Paramétrage réservé au Chef et à la DA-RH." };
+    }
+    if (!personId) return { success: false, error: "Personne introuvable." };
+    const req = !!onRequest, dec = !!onDecision;
+    // Plus aucune case cochée → on retire la ligne, pour que la table reste la
+    // liste de ceux qui reçoivent quelque chose, et rien d'autre.
+    if (!req && !dec) {
+      const { error } = await db.from("salary_notify_recipients").delete().eq("person_id", personId);
+      if (error) return { success: false, error: friendlyError(error, "Modification refusée.") };
+      return { success: true, onRequest: false, onDecision: false };
+    }
+    const { data: p } = await db.from("personnel").select("name").eq("id", personId).limit(1);
+    const { error } = await db.from("salary_notify_recipients").upsert({
+      person_id: personId, person_name: (p && p[0] && p[0].name) || "",
+      on_request: req, on_decision: dec, added_by: user.name,
+    }, { onConflict: "person_id" });
+    if (error) {
+      if (error.code === "42P01") {
+        return { success: false, error: "Migration 0020 non appliquée : le paramétrage n'existe pas encore en base." };
+      }
+      return { success: false, error: friendlyError(error, "Modification refusée.") };
+    }
+    return { success: true, onRequest: req, onDecision: dec };
   },
 
   async removeExternalBeneficiary(_t, name) {

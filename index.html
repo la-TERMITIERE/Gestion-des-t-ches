@@ -1365,7 +1365,12 @@
       // ✨ Assistante RH : voit aussi tout le personnel (lecture seule, cf. renderPersonnelView).
       if (base.indexOf('Personnel') === -1) base.splice(base.indexOf('Tâches') + 1, 0, 'Personnel');
     }
-    if (u.salaryRole || u.role === 'chef') {
+    // ✨ v7.2 : l'onglet salaire est ouvert à TOUS — chacun demande pour lui-même et
+    // suit sa demande. Les acteurs du circuit (RH/DF/GE/PAU) et le Chef y voient
+    // toute l'entreprise ; les autres, leur seule ligne (cf. getSalaryAuthorizations
+    // et la policy salary_select). Sous Apps Script, qui refuse encore l'accès aux
+    // non-acteurs, le drapeau est absent et l'onglet reste réservé comme avant.
+    if (u.salaryRole || u.role === 'chef' || hasFeature('salarySelf')) {
       if (base.indexOf('Autorisation salaire') === -1) {
         const ai = base.indexOf('Archives');
         if (ai !== -1) base.splice(ai, 0, 'Autorisation salaire');
@@ -7128,23 +7133,34 @@
     }
     salaryState = res;
     const vf = res.viewerFunction;
+    // ✨ v7.2 : « self » = personne hors circuit — elle ne voit et n'agit que sur
+    // sa propre demande. La limite est aussi posée en base (policy salary_select),
+    // l'affichage ne fait que s'y conformer.
+    const isSelf = res.scope === 'self';
     const vfLabel = vf
       ? ({ rh:'DA-RH', df:'Directeur Financier (DF)', ge:'Gérant (GE)', pau:'Personne Autorisée (PAU)' })[vf]
-      : 'Administrateur (supervision, lecture seule)';
+      : (res.isAdmin ? 'Administrateur (supervision, lecture seule)' : 'Bénéficiaire');
 
     let html = `<div class="page-title">💰 Autorisation de versement de salaire</div>
-      <div class="page-sub">Vous êtes connecté comme <strong>${escapeHtml(vfLabel)}</strong></div>`;
+      <div class="page-sub">Vous êtes connecté comme <strong>${escapeHtml(vfLabel)}</strong>${
+        isSelf ? ' — vous pouvez demander une autorisation <strong>pour vous-même</strong> et suivre son avancement' : ''}</div>`;
 
     html += `<div class="sal-chain">
-      <span class="sal-step s-demande">1 · Demande (RH)</span><span class="sal-arrow">→</span>
+      <span class="sal-step s-demande">1 · Demande</span><span class="sal-arrow">→</span>
       <span class="sal-step s-valide">2 · Validation (DF)</span><span class="sal-arrow">→</span>
       <span class="sal-step s-approuve">3 · Approbation (GE)</span><span class="sal-arrow">→</span>
       <span class="sal-step s-autorise">4 · Autorisation (PAU)</span>
     </div>`;
 
+    if (isSelf) {
+      html += `<div class="lvl-note">Cet écran ne montre que <strong>votre</strong> demande.
+        Les demandes de vos collègues, et les montants qui s'y rattachent, ne vous sont pas accessibles.</div>`;
+    }
+
     html += `<div class="toolbar">
-      <input type="search" class="search-box" id="sal-search" placeholder="🔍 Rechercher une personne…">
+      ${isSelf ? '' : '<input type="search" class="search-box" id="sal-search" placeholder="🔍 Rechercher une personne…">'}
       <div class="grow"></div>
+      ${res.canSetNotify ? `<button class="btn btn-secondary" id="sal-notify-cfg">⚙️ Paramétrer les notifications</button>` : ''}
       ${vf === 'rh' ? `<button class="btn btn-secondary" id="sal-add-ext">➕ Bénéficiaire externe</button>` : ''}
     </div>`;
     html += '<div id="sal-body"></div>';
@@ -7154,6 +7170,8 @@
     if (si) si.oninput = () => renderSalaryBody(si.value);
     const addBtn = $('sal-add-ext');
     if (addBtn) addBtn.onclick = openAddExternalBeneficiaryModal;
+    const cfgBtn = $('sal-notify-cfg');
+    if (cfgBtn) cfgBtn.onclick = openSalaryNotifyModal;
     renderSalaryBody('');
   }
 
@@ -7167,17 +7185,24 @@
       (r.dept || '').toLowerCase().includes(q) ||
       (r.fonction || '').toLowerCase().includes(q));
 
-    const counts = { demande:0, valide:0, approuve:0, autorise:0, rejete:0, none:0 };
-    (res.rows || []).forEach(r => { counts[r.statusKey] = (counts[r.statusKey] || 0) + 1; });
+    const isSelf = res.scope === 'self';
+    let html = '';
+    // Les compteurs n'ont de sens que sur une liste : sur une seule ligne, ils
+    // répéteraient le badge de statut affiché juste en dessous.
+    if (!isSelf) {
+      const counts = { demande:0, valide:0, approuve:0, autorise:0, rejete:0, none:0 };
+      (res.rows || []).forEach(r => { counts[r.statusKey] = (counts[r.statusKey] || 0) + 1; });
+      html += '<div class="kpi-grid">';
+      html += kpiCardSimple('En attente DF',  counts.demande,  '', counts.demande  ? 'warn' : '');
+      html += kpiCardSimple('En attente GE',  counts.valide,   '', counts.valide   ? 'warn' : '');
+      html += kpiCardSimple('En attente PAU', counts.approuve, '', counts.approuve ? 'warn' : '');
+      html += kpiCardSimple('Autorisés',      counts.autorise, '', counts.autorise ? 'ok' : '');
+      html += '</div>';
+    }
 
-    let html = '<div class="kpi-grid">';
-    html += kpiCardSimple('En attente DF',  counts.demande,  '', counts.demande  ? 'warn' : '');
-    html += kpiCardSimple('En attente GE',  counts.valide,   '', counts.valide   ? 'warn' : '');
-    html += kpiCardSimple('En attente PAU', counts.approuve, '', counts.approuve ? 'warn' : '');
-    html += kpiCardSimple('Autorisés',      counts.autorise, '', counts.autorise ? 'ok' : '');
-    html += '</div>';
-
-    html += `<div class="dash-section"><h3>👥 Bénéficiaires <span class="count">${rows.length}</span></h3>`;
+    html += isSelf
+      ? `<div class="dash-section"><h3>💰 Ma demande</h3>`
+      : `<div class="dash-section"><h3>👥 Bénéficiaires <span class="count">${rows.length}</span></h3>`;
     html += '<div class="sal-list">';
     rows.forEach(r => {
       const a = r.auth;
@@ -7206,11 +7231,15 @@
       }
 
       const extBadge = r.isExternal ? ' <span class="sal-ext">Externe</span>' : '';
+      // ✨ v7.2 : dans la liste complète, un acteur du circuit doit repérer sa
+      // propre ligne d'un coup d'œil — c'est la seule sur laquelle il demande.
+      const meBadge = (r.isMe && !isSelf)
+        ? ' <span class="sal-fn" style="background:#e8f0fe;color:#1967d2;font-weight:700;">vous</span>' : '';
       html += `<div class="sal-row">
         <div class="sal-row-main">
           <div class="sal-avatar ${r.isExternal ? 'ext' : ''}">${initials(r.person)}</div>
           <div class="sal-info">
-            <div class="sal-name">${escapeHtml(r.person)}${extBadge}${r.fonction ? ` <span class="sal-fn">${escapeHtml(r.fonction)}</span>` : ''}</div>
+            <div class="sal-name">${escapeHtml(r.person)}${extBadge}${meBadge}${r.fonction ? ` <span class="sal-fn">${escapeHtml(r.fonction)}</span>` : ''}</div>
             <div class="sal-meta">${metaBits.length ? metaBits.join(' · ') : '<span style="color:#9aa0a6;">Aucune demande en cours</span>'}</div>
           </div>
         </div>
@@ -7278,6 +7307,103 @@
       toast('✅ Bénéficiaire retiré.', 'success');
       renderSalaryAuth();
     } catch (e) { hideLoader(); toast('Erreur réseau', 'error'); }
+  }
+
+  // ✨ v7.2 : PARAMÉTRAGE — qui reçoit un e-mail quand une demande est initiée.
+  //  Deux moments volontairement séparés : beaucoup de gens veulent savoir qu'une
+  //  demande part, peu veulent suivre chaque issue. Réglage réservé au Chef et à
+  //  la DA-RH ; l'envoi lui-même est fait par l'Edge Function `notify`, qui relit
+  //  cette liste avec la clé service (type « salary_announce »).
+  let salaryNotifyPeople = null;
+
+  async function openSalaryNotifyModal() {
+    showLoader('Chargement…');
+    let res;
+    try { res = await call('getSalaryNotifySettings', URL_TOKEN); }
+    catch (e) { hideLoader(); toast('Erreur réseau', 'error'); return; }
+    hideLoader();
+    if (!res || !res.success) { toast((res && res.error) || 'Paramétrage indisponible', 'error'); return; }
+    if (res.available === false) {
+      toast('Migration 0020 non appliquée : le paramétrage n\'existe pas encore en base.', 'error');
+      return;
+    }
+    salaryNotifyPeople = res.people || [];
+
+    showModal('⚙️ Qui est prévenu d\'une demande de versement ?', `
+      <p style="font-size:13px;color:#5f6368;margin-top:0;">
+        Cochez les personnes à informer par e-mail. <strong>Le bénéficiaire est toujours
+        prévenu</strong> pour sa propre demande, et les acteurs du circuit (DF, GE, PAU)
+        continuent de recevoir leur e-mail « action requise » — inutile de les cocher pour ça.
+      </p>
+      <div style="display:flex;gap:16px;font-size:11px;color:#5f6368;font-weight:600;
+                  text-transform:uppercase;letter-spacing:.4px;padding:0 8px 6px;">
+        <span style="flex:1;">Personne</span>
+        <span style="width:82px;text-align:center;">Initiation</span>
+        <span style="width:82px;text-align:center;">Décisions</span>
+      </div>
+      <input type="search" class="search-box" id="saln-search" placeholder="🔍 Filtrer…" style="margin-bottom:8px;width:100%;">
+      <div class="team-members-list" id="saln-list" style="max-height:320px;"></div>
+      <div id="saln-count" style="font-size:12px;color:#5f6368;margin-top:8px;"></div>
+    `, [{ label: 'Fermer', class: 'btn-primary', onClick: closeModal }]);
+
+    const s = $('saln-search');
+    if (s) s.oninput = () => renderSalaryNotifyList(s.value);
+    renderSalaryNotifyList('');
+  }
+
+  function renderSalaryNotifyList(search) {
+    const list = $('saln-list');
+    if (!list || !salaryNotifyPeople) return;
+    const q = (search || '').toLowerCase().trim();
+    const shown = salaryNotifyPeople.filter(p => !q
+      || p.name.toLowerCase().includes(q)
+      || (p.dept || '').toLowerCase().includes(q)
+      || (p.fonction || '').toLowerCase().includes(q));
+
+    list.innerHTML = shown.length ? shown.map(p => `
+      <div class="team-member-chk" style="justify-content:space-between;">
+        <div style="flex:1;min-width:0;">
+          <div style="font-weight:600;">${escapeHtml(p.name)}</div>
+          <div style="font-size:11px;color:#5f6368;">${escapeHtml(p.fonction || '—')}${p.dept ? ' · ' + escapeHtml(p.dept) : ''}${
+            p.email ? '' : ' · <span style="color:#b06000;">sans e-mail</span>'}</div>
+        </div>
+        <span style="width:82px;text-align:center;">
+          <input type="checkbox" class="saln-chk" data-id="${escapeHtml(p.id)}" data-kind="request"
+                 ${p.onRequest ? 'checked' : ''} ${p.email ? '' : 'disabled title="Cette personne n\'a pas d\'adresse e-mail"'}>
+        </span>
+        <span style="width:82px;text-align:center;">
+          <input type="checkbox" class="saln-chk" data-id="${escapeHtml(p.id)}" data-kind="decision"
+                 ${p.onDecision ? 'checked' : ''} ${p.email ? '' : 'disabled'}>
+        </span>
+      </div>`).join('')
+      : '<div class="empty" style="padding:12px;">Aucun résultat</div>';
+
+    list.querySelectorAll('.saln-chk').forEach(chk => {
+      chk.onchange = () => toggleSalaryNotify(chk.dataset.id, chk.dataset.kind, chk);
+    });
+    const nReq = salaryNotifyPeople.filter(p => p.onRequest).length;
+    const nDec = salaryNotifyPeople.filter(p => p.onDecision).length;
+    const c = $('saln-count');
+    if (c) c.innerHTML = `<strong>${nReq}</strong> personne(s) prévenue(s) à l'initiation · <strong>${nDec}</strong> aux décisions.`;
+  }
+
+  async function toggleSalaryNotify(personId, kind, chk) {
+    const p = salaryNotifyPeople.find(x => x.id === personId);
+    if (!p) return;
+    const before = { onRequest: p.onRequest, onDecision: p.onDecision };
+    if (kind === 'request') p.onRequest = chk.checked; else p.onDecision = chk.checked;
+    chk.disabled = true;
+    const res = await call('setSalaryNotifyRecipient', URL_TOKEN, personId, p.onRequest, p.onDecision);
+    chk.disabled = false;
+    if (!res || !res.success) {
+      // Rollback : la case doit refléter ce que la base a réellement accepté.
+      p.onRequest = before.onRequest; p.onDecision = before.onDecision;
+      chk.checked = kind === 'request' ? p.onRequest : p.onDecision;
+      toast((res && res.error) || 'Modification refusée', 'error');
+      return;
+    }
+    const s = $('saln-search');
+    renderSalaryNotifyList(s ? s.value : '');
   }
 
   function openSalaryRequestModal(person) {
